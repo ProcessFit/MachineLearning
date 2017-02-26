@@ -38,9 +38,11 @@ library(randomForest)
     }
 </style>
 
+```{r setwd, echo=FALSE}
+setwd("~/Coursera")
+```
 
 ``` {r docfunctions, echo=FALSE}
-setwd("~/Coursera")
 ## check if model exists? If not, refit:
 loadModel <- function(modelName) {
       filename <- paste0(modelName,".RData")
@@ -230,7 +232,7 @@ conf
 ```
 
 From this full model, the relative importance of the predictors can be identified:
-```{r fulllmodelImportance, echo=FALSE, fig.width = 6, fig.height =5, fig.cap = "Figure 4: Relative importance of predictors in full random forest model"}
+```{r fulllmodelImportance, echo=FALSE, fig.width = 7, fig.height =7, fig.cap = "Figure 4: Relative importance of predictors in full random forest model"}
 plot(varImp(model.rf,scale=TRUE))
 ```
 From Figure 4, variables associated with the roll and pitch of the belt and forearm sensors, and magnetometer of the barbell have high relative importance. Variables associated with the arm sensor have relatively low importance.
@@ -362,7 +364,7 @@ conf
 
 A summary of all the modelling results are shown in Figure 5 as a box and whisker plot. The high accuracy of the "simple" model is significant as it suggests that modelling the "correctness" of this particular exercise can be achieved with just two sensors, and in fact only a subset of the measurements of those sensors, rather than with the full set of accelerometers, magnometers and gyroscope sensors installed on arms, forearms, belt and barbell as per the original experiment.
 
-```{r resultsDetailed, echo=FALSE, fig.cap="Figure 5.  Comparison of Moodel Accuracy and Kappa", fig.height=4, fig.width=5}
+```{r resultsDetailed, echo=FALSE, fig.cap="Figure 5.  Comparison of Moodel Accuracy and Kappa", fig.height=6, fig.width=7}
 results <- resamples(list(full=model.rf, 
                           foream = model.forearm,
                           dumbbellrf = model.dumbbellrf, 
@@ -399,110 +401,11 @@ Using the data collected from "wearable" sensors, modelling with random forest t
 
 Additional modelling demonstrated that similar results could be achieved with just two out of four of the wearable sensors (belt and forearm) to achieve an expected accuracy of 99.7%, and that by employing just 5 predictors from these sensors, a model with expected 98.6% accuracy could be determined.  
   
-  
-  
-  
-  
-  
+----
+# Appendix
 
+Code for saving and loading models to reduce the requirement to recalculate models while producing the markdown document:
 
-
-
-
-```{r summaryVals, results=FALSE, include = FALSE, eval=FALSE}
-## Remove the first 'header' columns
-#dd <- d[,-(1:7)]
-set.seed(1234)
-inTrain = createDataPartition(d.summary$classe, p = 3/4)[[1]]
-training = d.summary[ inTrain,]
-testing = d.summary[-inTrain,]
-
-# Cart
-mod.cart <- train(classe~., data=training, method="rpart")
-pred.cart <- predict(mod.cart,testing)
-confusionMatrix(testing$classe,pred.cart)
-
-# Random Forest
-set.seed(1234)
-mod.rf <- train(classe~., data = training, method = "rf")
-predtrain.rf <- predict(mod.rf,training)
-pred.rf <- predict(mod.rf,testing)
-confusionMatrix(testing$classe,pred.rf)
-
-# gbm
-set.seed(1234)
-mod.gbm <- train(classe~., data = training, method = "gbm", verbose=FALSE)
-predtrain.gbm <- predict(mod.gbm,training)
-pred.gbm <- predict(mod.gbm,testing)
-confusionMatrix(testing$classe,pred.gbm)
-
-
-## Stacking models
-stackem <- data.frame(classe=training$classe, gbm=predtrain.gbm, 
-                      rf=predtrain.rf)
-modelStack <- train(classe ~ ., data=stackem, method="rf")
-testStack <- data.frame(classe=testing$classe,gbm=pred.gbm, 
-                      rf=pred.rf)
-testFinal <- predict(modelStack,testStack)
-confusionMatrix(testing$classe,testFinal)
+```{r modelFunctions, ref.label='docfunctions', eval = FALSE, echo=TRUE}
 ```
-
-```{r consolidate1, include=FALSE, eval=FALSE}
-## Consolidate results for assessment
-results <- resamples(list(CART=mod.cart,GBM = mod.gbm,RF=mod.rf, Stack=modelStack))
-summary(results)$statistics[1]
-scales <- list(x=list(relation="free"), y=list(relation="free"))
-bwplot(results, scales=scales)
-```
-
-
-``` {r loopPlots3, include=FALSE, eval=FALSE}
-g <- ggplot(d, aes(magnet_forearm_x,magnet_forearm_z, colour=classe))
-g <- g + geom_point(alpha=0.2)
-g <- g + facet_wrap(~user_name,ncol=3)
-print(g)
-
-
-g <- ggplot(d, aes(magnet_belt_y,magnet_belt_z, colour=classe))
-g <- g + geom_point(alpha=0.2)
-g <- g + facet_wrap(~user_name,ncol=3)
-print(g)
-
-
-g <- ggplot(d, aes(accel_belt_y,accel_belt_z, colour=classe))
-g <- g + geom_point(alpha=0.2)
-g <- g + facet_wrap(~user_name,ncol=3)
-print(g)
-
-g <- ggplot(d, aes(magnet_arm_x,magnet_arm_z, colour=user_name))
-g <- g + geom_point(alpha=0.2)
-g <- g + facet_wrap(~classe,ncol=3)
-print(g)
-
-g <- ggplot(d, aes(magnet_dumbbell_x,magnet_dumbbell_y, colour=classe))
-g <- g + geom_point(alpha=0.2)
-g <- g + facet_wrap(~user_name,ncol=3)
-print(g)
-
-
-```
-
-
-``` {r loopPlots2, echo=FALSE, include=FALSE, eval=FALSE}
-g <- ggplot(d, aes(accel_arm_x,accel_arm_y, colour=classe))
-g <- g + geom_point(alpha=0.2)
-g <- g + facet_wrap(~user_name,ncol=3)
-print(g)
-
-g <- ggplot(d, aes(accel_arm_x,accel_arm_z, colour=classe))
-g <- g + geom_point(alpha=0.2)
-g <- g + facet_wrap(~user_name,ncol=3)
-print(g)
-
-g <- ggplot(d, aes(accel_arm_z,accel_arm_y, colour=classe))
-g <- g + geom_point(alpha=0.2)
-g <- g + facet_wrap(~user_name,ncol=3)
-print(g)
-
-```
-
+  
