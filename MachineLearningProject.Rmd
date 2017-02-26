@@ -1,0 +1,508 @@
+---
+title: "Machine Learning Project"
+author: "Lindy Woodburn"
+date: "21 February 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, dpi=72)
+library(caret)
+library(dplyr)
+library(ggplot2)
+library(rattle)
+library(randomForest)
+```
+
+
+<style>
+   th,td{
+     padding:1px 5px 1px 10px;
+   }
+   table{
+     margin:50px;
+   }
+   caption, p.caption{
+    font-size:110%;
+    color: #666666;
+    font-weight: bold;
+    text-align: center;
+    }
+    img {
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+    margin-top: 30px;
+    margin-bottom: 20px;
+    
+    }
+</style>
+
+
+``` {r docfunctions, echo=FALSE}
+setwd("~/Coursera")
+## check if model exists? If not, refit:
+loadModel <- function(modelName) {
+      filename <- paste0(modelName,".RData")
+      if(file.exists(filename)) {
+      ## load model
+            model <- load(filename)
+            result <- get(model)
+} else {
+    ## (re)fit the model
+      result <- FALSE
+}
+      result
+}
+
+saveModel <- function(modelName) {
+      filename <- paste0(deparse(substitute(modelName)),".RData")
+      save(modelName,file=filename)
+      filename
+
+}
+
+```
+
+
+
+
+# Executive Summary
+
+The data from acelerometers on the belt, forearm, arm and dumbbell was recorded during barbell lifts from a group of six participants.  The participants were asked to perform the lifts correctly, and incorrectly in 5 different ways. The goal of this analysis was to use machine learning to predict **how well** a participant performed the dumbbell lift, based on the accelerometer data.
+
+To predict the classfication of the weight lifting, a number of random forest models were built using the caret package. Cross validation was applied using bootstrap resampling and 25 resampling iterations. 
+
+Using the entire set of 52 available variables (13 measurements from each of the four sensors), a model with an estimated accuracy of 99.8% was achieved (esitimated out of sample error of 0.2%). To avoid overfitting, and to provide opportunities for practical application, a simpler model based on just two of sensors (forearm and belt) was created with an estimated accuracy of 99.7%, and an even simpler model with just five predictors from forearm and belt gyroscope sensors with a predictive accuracy of 98.6%.
+
+The advantage of the "simple" model would be in potential practical application, where a subject would required just two wearable sensors, and the computational demand for calculation of the classification would be minimised.
+
+
+# Background
+
+The data for this analysis comes from the *Weight Lifting Exercises Dataset* from the source [http://groupware.les.inf.puc-rio.br/har](http://groupware.les.inf.puc-rio.br/har). 
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: 
+   
+   -  **Class A**:  exactly according to the specification
+   -  **Class B**:  throwing the elbows to the front,  
+   -  **Class C**:  lifting the dumbbell only halfway, 
+   -  **Class D**:  lowering the dumbbell only halfway, 
+   -  **Class E**:  throwing the hips to the front (Class E).
+
+Using machine learning algorithms, a number of different models were developed to predict the Class of exercise performed by the participant, based on the data collected by the sensors.
+
+# Data Loading and Preparation
+
+The supplied data consists of 19,622 observations of 160 variables. Of the 160 variables, 52 were recorded measures, 92 derived (e.g. max, min, skew, avg etc), 1 classifier 'classe' and the remainder descriptors of the observations (e.g. timestamp, user_name). 
+
+Data cleaning involved:
+
+   -  Treating the classification variable *'classe'* as a factor.
+   -  Splitting data into two data sets, summary and detailed, and removing NA values. Only the detailed data set was used for this analysis.
+
+
+```{r dataLoading}
+## --- Read data ---
+setwd("~/Coursera")
+mldata <- read.csv("./MachineLearning Data/pml-training.csv", 
+                 stringsAsFactors = FALSE, 
+                 na.strings=c("NA","","#DIV/0!"))
+
+## --- Apply factors for classe and user_name strings
+mldata$classe <- as.factor(mldata$classe)
+mldata$user_name <- as.factor(mldata$user_name)
+
+## --- Check for NA values in data set ---
+a <- sapply(1:ncol(mldata), function(x)sum(is.na(mldata[,x])))/nrow(mldata)
+
+## --- Split the data set into the summary and detailed groups based on NA
+## Summary Data 
+d.summary <- mldata[,c(which(a>0.5 & a < 1),160)]
+d.summary <- d.summary[which(complete.cases(d.summary)),]
+d.summary <- d.summary[,-which(colSums(d.summary[,-95])==0)] 
+## Detailed Data
+d <- mldata[,-which(a>0.5)]
+d <- d[complete.cases(d),] 
+
+```
+
+# Data Exploration and Visualisation
+
+To understand the data, preliminary plots were created. Representative samples of the data exploration are shown in the appendix, where variables were chosen were based on knowledge of the exercise, where movements are expected to generate most data in the 'y' (up/down) and 'z' (front/back) directions, with most movement expected be recorded in the extremities: forearms /dumbbells.
+
+### Data recorded from forearm accelerometers by participant
+``` {r loopPlots, echo=FALSE, fig.cap="Figure 1. Forearm acceleration y vs x", fig.height=4.5 }
+g <- ggplot(d, aes(accel_forearm_x,accel_forearm_y, colour=classe, ))
+g <- g + geom_point(alpha=0.3)
+g <- g + facet_wrap(~user_name,ncol=3)
+print(g)
+```
+The shape of the y-x (up/down vs lateral movement) for participants is generally similar, however it is noted that the scale and shape of this relationship appears to be dependent on the user.  For the purposes of this analysis, the "user" will not be considered
+
+
+```{r boxplot, fig.height=3, fig.width=5, fig.cap = "Figure 2. Variation in 'pitch_forearm' measurement with participant and class", echo=FALSE}
+g <- ggplot(d, aes(x=classe, y = pitch_forearm))
+g  + geom_jitter(alpha=0.1,aes(colour=classe,alpha=0.1))+ geom_boxplot(aes(colour=classe,alpha=0.4))+facet_grid(~user_name)
+```
+
+
+
+### Time Series Data
+A time-series charts shows how the measured variables changed with time during the exercise. The timestamp was baselined for each subject. 
+The time series shows:
+
+   -  Participants performed the exercise in the same order
+   -  The speed at which barbell lifts were performed (frequency) was variable across the participants.
+   
+(Unsurprisingly, a model fitted using the baselined timestamp provided an extremely accurate predictor of exercise 'classe')
+``` {r timeseries, fig.width = 5, fig.height=4.5, fig.cap="Figure 3. Variation in 'pitch_forearm' with time by participant.", echo=FALSE}
+# --- Baseline timestamp data to assist with data visualisation ---
+d$ts <- d$raw_timestamp_part_1 +
+      d$raw_timestamp_part_2/10^6
+d <- d %>% group_by(user_name) %>% mutate(tss=ts-min(ts, na.rm=TRUE))
+
+g <- ggplot(d, aes(tss ,pitch_forearm, colour=classe))
+g <- g + geom_line(alpha=0.9) + labs(x="Time Since Start (seconds)")
+g <- g + facet_wrap(~user_name,ncol=1)
+print(g)
+
+```
+
+
+Insights from the exploratory analysis indicated that:
+
+   - acceleration data: each of the six different classes of barbell lifting showed a similar general "shape", but significant variation in magnitude of accelerations.
+     +  This would be consistent with different physical stature of participants, and speed with which the exercises were performed
+   - Some missing values for individuals - may be indicative of incorrect placement or device failure. (e.g. adelmo missing data recorded zero values for pitch_forearm as shown in Figure 3).
+   - Potentially some misclassification in original data set (e.g. Charles and Carlito at the transition between class 1 and 2 exercises as shwon in Figure 3)
+
+For this analysis, no attempt was made to standardise or pre-process data, as adequate results were obtained based on raw information.
+
+# Model Development and Evaluation
+
+## Modelling Setup
+
+Modelling methods used were:
+    
+   - R caret package used to apply random forest modelling.
+   - Default cross-validation as per caret model: Resampling using bootstrapping, 25 iterations.  
+   - 30% of the training data set was partitioned as a validation set for model testing. 
+   - Based on models produced and the importance of variables assessed, simplification of the model by reducing the number of predictors was tested.   
+   
+The models produced were:  
+
+  1. **model.rf**:  full random forest models based on 52 variables from all four sensor locations.
+  2. **model.dumbbellrf**:  dumbbell sensors only
+  3. **model.dbbeltrf**: dumbbell + belt sensors
+  4. **model.forearm**: forearm sensors only
+  5. **model.armbeltrf**: forearm + belt sensors
+  6. **model.simple**: five predictors from forearm and belt sensors
+
+## Models and Summary Statistics
+The code and summary statistics for each model is shown below.
+
+#### Model 1.  modelf.rf  - random forest using 52 variables
+```{r model1}
+set.seed(1234)
+dd <- d[,-(1:7)] #remove header columns
+inTrain <- createDataPartition(y=d$classe , p=0.7, list=FALSE)
+train <- dd[inTrain,]
+validation <- dd[-inTrain,]
+
+## --- modelrf ---
+model.rf <- loadModel("model.rf")
+if(length(model.rf)==1){
+      set.seed(1234)
+      mod.rf <- train(classe~., data = train, method = "rf")
+      saveModel(model.rf)
+      }
+predtrain.rf <- predict(model.rf,train)
+predvalid.rf <- predict(model.rf,validation)
+acc <- confusionMatrix(validation$classe,predvalid.rf)$overall[1:2]
+conf <- confusionMatrix(validation$classe,predvalid.rf)$table
+import <- varImp(model.rf, scale=TRUE)
+```
+**Model 1 - Accuracy and Confusion Matrix against validation data**
+``` {r model1output, echo=FALSE}
+acc 
+conf
+```
+
+From this full model, the relative importance of the predictors can be identified:
+```{r fulllmodelImportance, echo=FALSE, fig.width = 6, fig.height =5, fig.cap = "Figure 4: Relative importance of predictors in full random forest model"}
+plot(varImp(model.rf,scale=TRUE))
+```
+From Figure 4, variables associated with the roll and pitch of the belt and forearm sensors, and magnetometer of the barbell have high relative importance. Variables associated with the arm sensor have relatively low importance.
+
+Alternative models, using combinations of barbell, forearm and belt sensor measurements were built, as per below.
+
+#### Model 2.  model.dumbbellrf - dumbbell sensors only
+```{r model2}
+train.dumbbell <- train[,c(grep("dumbbell",names(train)),53)]
+validation.dumbbell <- validation[,c(grep("dumbbell",names(validation)),53)]
+
+
+model.dumbbellrf <- loadModel("model.dumbbellrf")
+if(length(model.dumbbellrf)==1){
+      set.seed(1234)
+      system.time({model.dumbbellrf <- 
+            train(classe~., data = train.dumbbell, method = "rf")})
+      saveModel(model.dumbbellrf)
+}
+
+predtrain.dumbbellrf <- predict(model.dumbbellrf,train.dumbbell)
+predtest.dumbbellrf <- predict(model.dumbbellrf,validation.dumbbell)
+acc <- confusionMatrix(validation.dumbbell$classe,predtest.dumbbellrf)$overall[1:2]
+conf <- confusionMatrix(validation.dumbbell$classe,predtest.dumbbellrf)$table
+```
+**Model 2 - Accuracy and Confusion Matrix against validation data**
+``` {r model2output, echo=FALSE}
+acc 
+conf
+```
+
+#### Model 3.  model.dbbelt - dumbbell + belt sensors
+```{r model3}
+train.dbbelt <- train[,c(grep("dumbbell|belt",names(train)),53)]
+validation.dbbelt <- validation[,c(grep("dumbbell|belt",names(validation)),53)]
+# Build the model
+model.dbbeltrf <- loadModel("model.dbbeltrf")
+if(length(model.dbbeltrf)==1){
+      set.seed(1234)
+      system.time({model.dbbeltrf <- 
+            train(classe~., data = train.dbbelt, method = "rf")})
+      saveModel(model.dbbeltrf)
+}
+
+predtrain.dbbeltrf <- predict(model.dbbeltrf,train.dbbelt)
+predtest.dbbeltrf <- predict(model.dbbeltrf,validation.dbbelt)
+acc <-confusionMatrix(validation.dbbelt$classe,predtest.dbbeltrf)$overall[1:2]
+conf <-confusionMatrix(validation.dbbelt$classe,predtest.dbbeltrf)$table
+```
+**Model 3 - Accuracy and Confusion Matrix against validation data**
+``` {r model3output, echo=FALSE}
+acc 
+conf
+```
+
+#### Model 4.  model.forearm - forearm sensors only
+```{r model4}
+train.forearm <- train[,c(grep("forearm",names(train)),53)]
+validation.forearm <- validation[,c(grep("forearm",names(validation)),53)]
+# Build the model
+model.forearm <- loadModel("model.forearm")
+if(length(model.forearm)==1){
+      set.seed(1234)
+      system.time({model.forearm <- 
+            train(classe~., data = train.forearm, method = "rf")})
+      saveModel(model.forearm)
+}
+predtrain.forearm <- predict(model.forearm,train.forearm)
+predtest.forearm <- predict(model.forearm,validation.forearm)
+acc <- confusionMatrix(validation.forearm$classe,predtest.forearm)$overall[1:2]
+conf <- confusionMatrix(validation.forearm$classe,predtest.forearm)$table
+```
+**Model 4 - Accuracy and Confusion Matrix against validation data**
+``` {r model4output, echo=FALSE}
+acc 
+conf
+```
+
+#### Model 5.  model.armbeltrf - forearm + belt sensors
+```{r model5}
+train.armbelt <- train[,c(grep("forearm|belt",names(train)),53)]
+validation.armbelt <- validation[,c(grep("forearm|belt",names(validation)),53)]
+# Build the model
+model.armbeltrf <- loadModel("model.armbeltrf")
+if(length(model.armbeltrf)==1){
+      set.seed(1234)
+      system.time({model.armbeltrf <- 
+            train(classe~., data = train.armbelt, method = "rf")})
+      saveModel(model.armbeltrf)
+}
+predtrain.armbeltrf <- predict(model.armbeltrf,train.armbelt)
+predtest.armbeltrf <- predict(model.armbeltrf,validation.armbelt)
+acc <-confusionMatrix(validation.armbelt$classe,predtest.armbeltrf)$overall[1:2]
+conf <-confusionMatrix(validation.armbelt$classe,predtest.armbeltrf)$table
+```
+**Model 5 - Accuracy and Confusion Matrix against validation data**
+``` {r model5output, echo=FALSE}
+acc 
+conf
+```
+
+#### Model 6.  model.simple - 5 predictors from belt + forearm sensors
+Based on the previous results, a "simple" model, using "roll_belt", "yaw_belt", 
+,"pitch_forearm","pitch_belt", and "roll_forearm" was created:
+
+```{r simple}
+simpleVars <- c("roll_belt","yaw_belt","pitch_forearm","pitch_belt", "roll_forearm","classe")
+train.simple <- train[,simpleVars]
+validation.simple <- validation[,simpleVars]
+model.simple <- loadModel("model.simple")
+if(length(model.simple)==1){
+      set.seed(1234)
+      system.time({model.simple <- 
+            train(classe~., data = train.simple, method = "rf")})
+      saveModel(model.simple)
+}
+predtrain.simple <- predict(model.simple,train.simple)
+predtest.simple <- predict(model.simple,validation.simple)
+acc <- confusionMatrix(validation.simple$classe,predtest.simple)$overall[1:2]
+conf <- confusionMatrix(validation.simple$classe,predtest.simple)$table
+```
+**Model 6 - Accuracy and Confusion Matrix against validation data**
+``` {r model6output, echo=FALSE}
+acc 
+conf
+```
+
+## Model Selection
+
+A summary of all the modelling results are shown in Figure 5 as a box and whisker plot. The high accuracy of the "simple" model is significant as it suggests that modelling the "correctness" of this particular exercise can be achieved with just two sensors, and in fact only a subset of the measurements of those sensors, rather than with the full set of accelerometers, magnometers and gyroscope sensors installed on arms, forearms, belt and barbell as per the original experiment.
+
+```{r resultsDetailed, echo=FALSE, fig.cap="Figure 5.  Comparison of Moodel Accuracy and Kappa", fig.height=4, fig.width=5}
+results <- resamples(list(full=model.rf, 
+                          foream = model.forearm,
+                          dumbbellrf = model.dumbbellrf, 
+                          armbeltrf=model.armbeltrf,
+                          dbbeltrf = model.dbbeltrf,
+                          simple = model.simple
+                         ))
+
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+bwplot(results, scales=scales)
+```
+
+Due to the potential for overfitting in the full model, the model selected to apply to the hold-out test data set is `model.armbeltrf`. In applying this model, the same data cleaning applied to the train test set is applied prior to creating the predictions.  The expected out of sample error rate for this data set is 1 - 99.66 = 0.36%.
+
+# Predictions on Test Data Set
+The test data set is loaded, and processed as per the training test set:
+
+```{r finalPrediction}
+testdata <- read.csv("./MachineLearning Data/pml-testing.csv", 
+                 stringsAsFactors = FALSE, 
+                 na.strings=c("NA","","#DIV/0!"))
+predict <- predict(model.armbeltrf,testdata)
+```
+
+The predicted values for the test data set are:  
+
+`r predict`
+
+It is noted that the "simple" model produced the exact same predictions.
+
+
+# Conclusion
+Using the data collected from "wearable" sensors, modelling with random forest techniques using bootstrap resampling was able to predict the classification of weightlifting exercises, with an expected out-of-model error rate of < 0.2% (expected accuracy = 99.8%).  
+
+Additional modelling demonstrated that similar results could be achieved with just two out of four of the wearable sensors (belt and forearm) to achieve an expected accuracy of 99.7%, and that by employing just 5 predictors from these sensors, a model with expected 98.6% accuracy could be determined.  
+  
+  
+  
+  
+  
+  
+
+
+
+
+
+```{r summaryVals, results=FALSE, include = FALSE, eval=FALSE}
+## Remove the first 'header' columns
+#dd <- d[,-(1:7)]
+set.seed(1234)
+inTrain = createDataPartition(d.summary$classe, p = 3/4)[[1]]
+training = d.summary[ inTrain,]
+testing = d.summary[-inTrain,]
+
+# Cart
+mod.cart <- train(classe~., data=training, method="rpart")
+pred.cart <- predict(mod.cart,testing)
+confusionMatrix(testing$classe,pred.cart)
+
+# Random Forest
+set.seed(1234)
+mod.rf <- train(classe~., data = training, method = "rf")
+predtrain.rf <- predict(mod.rf,training)
+pred.rf <- predict(mod.rf,testing)
+confusionMatrix(testing$classe,pred.rf)
+
+# gbm
+set.seed(1234)
+mod.gbm <- train(classe~., data = training, method = "gbm", verbose=FALSE)
+predtrain.gbm <- predict(mod.gbm,training)
+pred.gbm <- predict(mod.gbm,testing)
+confusionMatrix(testing$classe,pred.gbm)
+
+
+## Stacking models
+stackem <- data.frame(classe=training$classe, gbm=predtrain.gbm, 
+                      rf=predtrain.rf)
+modelStack <- train(classe ~ ., data=stackem, method="rf")
+testStack <- data.frame(classe=testing$classe,gbm=pred.gbm, 
+                      rf=pred.rf)
+testFinal <- predict(modelStack,testStack)
+confusionMatrix(testing$classe,testFinal)
+```
+
+```{r consolidate1, include=FALSE, eval=FALSE}
+## Consolidate results for assessment
+results <- resamples(list(CART=mod.cart,GBM = mod.gbm,RF=mod.rf, Stack=modelStack))
+summary(results)$statistics[1]
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+bwplot(results, scales=scales)
+```
+
+
+``` {r loopPlots3, include=FALSE, eval=FALSE}
+g <- ggplot(d, aes(magnet_forearm_x,magnet_forearm_z, colour=classe))
+g <- g + geom_point(alpha=0.2)
+g <- g + facet_wrap(~user_name,ncol=3)
+print(g)
+
+
+g <- ggplot(d, aes(magnet_belt_y,magnet_belt_z, colour=classe))
+g <- g + geom_point(alpha=0.2)
+g <- g + facet_wrap(~user_name,ncol=3)
+print(g)
+
+
+g <- ggplot(d, aes(accel_belt_y,accel_belt_z, colour=classe))
+g <- g + geom_point(alpha=0.2)
+g <- g + facet_wrap(~user_name,ncol=3)
+print(g)
+
+g <- ggplot(d, aes(magnet_arm_x,magnet_arm_z, colour=user_name))
+g <- g + geom_point(alpha=0.2)
+g <- g + facet_wrap(~classe,ncol=3)
+print(g)
+
+g <- ggplot(d, aes(magnet_dumbbell_x,magnet_dumbbell_y, colour=classe))
+g <- g + geom_point(alpha=0.2)
+g <- g + facet_wrap(~user_name,ncol=3)
+print(g)
+
+
+```
+
+
+``` {r loopPlots2, echo=FALSE, include=FALSE, eval=FALSE}
+g <- ggplot(d, aes(accel_arm_x,accel_arm_y, colour=classe))
+g <- g + geom_point(alpha=0.2)
+g <- g + facet_wrap(~user_name,ncol=3)
+print(g)
+
+g <- ggplot(d, aes(accel_arm_x,accel_arm_z, colour=classe))
+g <- g + geom_point(alpha=0.2)
+g <- g + facet_wrap(~user_name,ncol=3)
+print(g)
+
+g <- ggplot(d, aes(accel_arm_z,accel_arm_y, colour=classe))
+g <- g + geom_point(alpha=0.2)
+g <- g + facet_wrap(~user_name,ncol=3)
+print(g)
+
+```
+
